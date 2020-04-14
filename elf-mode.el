@@ -80,11 +80,15 @@
     (save-excursion
       (let* ((state (cdr (assoc elf-mode-buffer-type elf-mode-buffer-types)))
              (command (cdr (assoc 'command state)))
-             (inhibit-read-only t))
+             (inhibit-read-only t)
+             (file-name
+              (cond
+               ((tramp-tramp-file-p (buffer-file-name)) (tramp-handle-file-local-copy (buffer-file-name)))
+               (t (buffer-file-name)))))
         (erase-buffer)
         (insert
          (shell-command-to-string
-          (format command (buffer-file-name))))
+          (format command file-name)))
         (set-buffer-modified-p nil)))
       ;;
       (cond
