@@ -3,11 +3,11 @@
 ;; Copyright (C) 2016 Oleh Krehel
 ;; Copyright (C) 2020 Michael Krasnyk
 
-;; Author: Oleh Krehel <ohwoeowho@gmail.com>
-;; URL: https://github.com/abo-abo/elf-mode
-;; Version: 0.1.0
-;; Package-Requires: ((emacs "24.3"))
-;; Keywords: matching
+;; Author: Oleh Krehel <ohwoeowho@gmail.com>, Michael Krasnyk <michael.krasnyk@gmail.com>
+;; URL: https://github.com/oxidase/elf-mode
+;; Package-Requires: ((emacs "25") (async-await "1.0"))
+;; Version: 1.0
+;; Keywords: elf readelf convenience
 
 ;; This file is NOT part of GNU Emacs.
 
@@ -29,11 +29,10 @@
 ;; Toggle `elf-mode' to show the symbols that the binary uses instead
 ;; of the actual binary contents.
 ;;
-;; Use `elf-setup-default' to make `elf-mode' get called
-;; automatically.
 
 ;;; Code:
 
+(require 'async-await)
 
 (defvar elf-mode-buffer-initial-type 'dynamic)
 
@@ -83,9 +82,12 @@
              (inhibit-read-only t)
              (file-name
               (cond
-               ((tramp-tramp-file-p (buffer-file-name)) (tramp-handle-file-local-copy (buffer-file-name)))
+               ((and (boundp 'tramp-tramp-file-p) (tramp-tramp-file-p (buffer-file-name)))
+                (tramp-handle-file-local-copy (buffer-file-name)))
                (t (buffer-file-name)))))
         (erase-buffer)
+        (print (buffer-file-name))
+        (print file-name)
         (insert
          (shell-command-to-string
           (format command file-name)))
