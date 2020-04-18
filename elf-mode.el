@@ -5,7 +5,7 @@
 
 ;; Author: Oleh Krehel <ohwoeowho@gmail.com>, Michael Krasnyk <michael.krasnyk@gmail.com>
 ;; URL: https://github.com/oxidase/elf-mode
-;; Package-Requires: ((emacs "25") (async-await "1.0"))
+;; Package-Requires: ((emacs "25"))
 ;; Version: 1.0
 ;; Keywords: elf readelf convenience
 
@@ -32,32 +32,38 @@
 
 ;;; Code:
 
-(require 'async-await)
+(eval-when-compile (require 'subr-x))
 
 (defvar elf-mode-buffer-initial-type 'dynamic)
 
 (defvar-local elf-mode-buffer-type elf-mode-buffer-initial-type)
 
 (defvar-local elf-mode-buffer-types
-  '((arch-specific   . ((key . "A") (command . "readelf --arch-specific -W %s")))
-    (archive-index   . ((key . "c") (command . "readelf --archive-index -W %s")))
-    (dynamic         . ((key . "d") (command . "readelf --dynamic -W %s")))
-    (headers         . ((key . "e") (command . "readelf --headers -W %s")))
-    (section-groups  . ((key . "G") (command . "readelf --section-groups -W %s")))
-    (header          . ((key . "h") (command . "readelf --file-header -W %s")))
-    (histogram       . ((key . "I") (command . "readelf --histogram -W %s")))
-    (program-headers . ((key . "l") (command . "readelf --program-headers -W %s")))
-    (notes           . ((key . "n") (command . "readelf --notes -W %s")))
-    (relocs          . ((key . "r") (command . "readelf --relocs -W %s")))
-    (section-headers . ((key . "S") (command . "readelf --section-headers -W %s")))
-    (symbols         . ((key . "s") (command . "readelf --symbols -W %s")))
-    (unwind          . ((key . "u") (command . "readelf --unwind -W %s")))
-    (version-info    . ((key . "V") (command . "readelf --version-info -W %s")))
-    (dyn-syms        . ((key . "x") (command . "readelf --dyn-syms -W %s")))
+  '((arch-specific   . ((key . "A") (command . ("readelf" "-W" "--arch-specific"))))
+    (archive-index   . ((key . "c") (command . ("readelf" "-W" "--archive-index"))))
+    (dynamic         . ((key . "d") (command . ("readelf" "-W" "--dynamic"))))
+    (headers         . ((key . "e") (command . ("readelf" "-W" "--headers"))))
+    (section-groups  . ((key . "G") (command . ("readelf" "-W" "--section-groups"))))
+    (header          . ((key . "h") (command . ("readelf" "-W" "--file-header"))))
+    (histogram       . ((key . "I") (command . ("readelf" "-W" "--histogram"))))
+    (program-headers . ((key . "l") (command . ("readelf" "-W" "--program-headers"))))
+    (notes           . ((key . "n") (command . ("readelf" "-W" "--notes"))))
+    (relocs          . ((key . "r") (command . ("readelf" "-W" "--relocs"))))
+    (section-headers . ((key . "S") (command . ("readelf" "-W" "--section-headers"))))
+    (symbols         . ((key . "s") (command . ("readelf" "-W" "--symbols"))))
+    (unwind          . ((key . "u") (command . ("readelf" "-W" "--unwind"))))
+    (version-info    . ((key . "V") (command . ("readelf" "-W" "--version-info"))))
+    (dyn-syms        . ((key . "x") (command . ("readelf" "-W" "--dyn-syms"))))
 ))
 
 (defvar-local elf-mode-disassemble-command
   "gdb -n -q -batch -ex 'file %s' -ex 'disassemble/rs %s'")
+
+(defun elf-mode-buffer-file-name ()
+  (cond
+   ((and (fboundp 'tramp-tramp-file-p) (tramp-tramp-file-p (buffer-file-name)))
+    (tramp-handle-file-local-copy (buffer-file-name)))
+   (t (buffer-file-name))))
 
 (defun elf-add-func-refs ()
   (save-excursion
@@ -76,27 +82,40 @@
 (defun elf-revert-buffer ()
   (interactive)
   (when (eq 'elf-mode major-mode)
-    (save-excursion
-      (let* ((state (cdr (assoc elf-mode-buffer-type elf-mode-buffer-types)))
-             (command (cdr (assoc 'command state)))
-             (inhibit-read-only t)
-             (file-name
-              (cond
-               ((and (boundp 'tramp-tramp-file-p) (tramp-tramp-file-p (buffer-file-name)))
-                (tramp-handle-file-local-copy (buffer-file-name)))
-               (t (buffer-file-name)))))
-        (erase-buffer)
-        (print (buffer-file-name))
-        (print file-name)
-        (insert
-         (shell-command-to-string
-          (format command file-name)))
-        (set-buffer-modified-p nil)))
-      ;;
-      (cond
-       ((eq elf-mode-buffer-type 'symbols) (elf-add-func-refs)))
-      ;;
-      (read-only-mode)))
+    (let* ((state (cdr (assoc elf-mode-buffer-type elf-mode-buffer-types)))
+           (command (cdr (assoc 'command state)))
+           (stdout (current-buffer))
+           (stderr (generate-new-buffer "*readelf stderr*"))
+           (file-name (elf-mode-buffer-file-name)))
+      (setf (buffer-string) "")
+
+      (make-process
+       :name "readelf"
+       :buffer nil
+       :stderr stderr
+       :noquery t
+       :command (append command `(,file-name))
+       :filter
+       (lambda (proc _msg)
+         (when (buffer-live-p stdout)
+           (with-current-buffer stdout
+             (setq-local inhibit-read-only t)
+             (goto-char (point-max))
+             (insert _msg))))
+       :sentinel
+       (lambda (proc event)
+         (with-current-buffer stdout
+           (when (string= event "finished\n")
+             (cond
+              ((eq elf-mode-buffer-type 'symbols) (elf-add-func-refs))))
+           (goto-char (point-min))
+           (set-buffer-modified-p nil)
+           (read-only-mode))
+         (with-current-buffer stderr
+           (let ((err (string-trim (buffer-string))))
+             (unless (string= "" err)
+               (message "elf-mode: %s\n%s" event err))))
+         (kill-buffer stderr))))))
 
 (defun elf-mode-set-disassemble-command (s)
   (interactive "sDisassemble command: ")
@@ -107,7 +126,7 @@
   (interactive)
   (let* ((symbol (buffer-substring (overlay-start o) (overlay-end o)))
          (buffer-name (format "%s(%s)" (buffer-name) symbol))
-         (command (format elf-mode-disassemble-command (buffer-file-name) symbol)))
+         (command (format elf-mode-disassemble-command (elf-mode-buffer-file-name) symbol)))
     (with-current-buffer (pop-to-buffer buffer-name)
       (shell-command command (current-buffer))
       (flush-lines "^[[:space:]]*$" (point-min) (point-max))
@@ -150,6 +169,16 @@
   :syntax-table elf-mode-syntax-table
   (buffer-disable-undo)
   (elf-revert-buffer))
+
+;; TODO
+;; ;; (require 's)
+;; (defun debug-buffer-advice (fun arg)
+;;   ;(when (s-contains? "treemacs-persist" arg)
+;;                                         ;(backtrace);)
+;;   (print fun)
+;;   (print arg)
+;;   (funcall fun arg))
+;; (advice-add #'get-buffer-create :around #'debug-buffer-advice)
 
 ;;;###autoload
 (add-to-list 'magic-mode-alist '("^\177ELF" . elf-mode))
