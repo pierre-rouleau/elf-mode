@@ -29,6 +29,8 @@
 ;; Toggle `elf-mode' to show the symbols that the binary uses instead
 ;; of the actual binary contents.
 ;;
+;; References:
+;;    https://en.wikipedia.org/wiki/Executable_and_Linkable_Format#Specifications
 
 ;;; Code:
 
@@ -47,6 +49,7 @@
     (header          . ((key . "h") (command . ("readelf" "-W" "--file-header"))))
     (histogram       . ((key . "I") (command . ("readelf" "-W" "--histogram"))))
     (program-headers . ((key . "l") (command . ("readelf" "-W" "--program-headers"))))
+    (md5sum          . ((key . "m") (command . ("md5sum"))))
     (notes           . ((key . "n") (command . ("readelf" "-W" "--notes"))))
     (relocs          . ((key . "r") (command . ("readelf" "-W" "--relocs"))))
     (section-headers . ((key . "S") (command . ("readelf" "-W" "--section-headers"))))
@@ -54,10 +57,14 @@
     (unwind          . ((key . "u") (command . ("readelf" "-W" "--unwind"))))
     (version-info    . ((key . "V") (command . ("readelf" "-W" "--version-info"))))
     (dyn-syms        . ((key . "x") (command . ("readelf" "-W" "--dyn-syms"))))
+    (strings         . ((key . "z") (command . ("strings"))))
 ))
 
 (defvar-local elf-mode-disassemble-command
   "gdb -n -q -batch -ex 'file %s' -ex 'disassemble/rs %s'")
+
+(defvar-local elf-mode-binary-command
+  "dd status=none bs=1 skip=%s count=%s if=%s")
 
 (defun elf-mode-buffer-file-name ()
   (cond
@@ -66,18 +73,31 @@
    (t (buffer-file-name))))
 
 (defun elf-add-func-refs ()
-  (save-excursion
-    (goto-char (point-min))
-    (while (search-forward "FUNC" nil t)
-      (dotimes (_i 3)
-        (skip-chars-forward " \t")
-        (search-forward " "))
-      (let ((beg (point))
-            (end (progn (forward-word) (point))))
-        (make-button
-         beg end
-         'action #'elf-mode-disassemble
-         'mouse-action #'elf-mode-disassemble)))))
+  (goto-char (point-min))
+  (while (re-search-forward "FUNC[[:space:]]+\\([[:alnum:]]+[[:space:]]+\\)\\{3\\}\\(\\sw+\\)" nil t)
+    (let* ((name (match-string 2))
+           (ol (make-button
+                (match-beginning 2) (match-end 2)
+                'help-echo (format "disassemble %s" name)
+                'action #'elf-mode-disassemble
+                'mouse-action #'elf-mode-disassemble)))
+      (overlay-put ol 'symbol name))))
+
+(defun elf-add-sections-refs ()
+  (goto-char (point-min))
+  (while (re-search-forward "^ *\\[ *[[:digit:]]+] +\\([^ ]+\\) +[^ ]+ +[^ ]+ +\\([^ ]+\\) +\\([^ ]+\\)" nil t)
+    (when (string-prefix-p "." (match-string 1))
+      (let* ((name (match-string 1))
+             (offset (string-to-number (match-string 2) 16))
+             (size (string-to-number (match-string 3) 16))
+             (ol (make-button
+                  (match-beginning 1) (match-end 1)
+                  'help-echo (format "hexl %s" (match-string 1))
+                  'action #'elf-mode-binary
+                  'mouse-action #'elf-mode-binary)))
+        (overlay-put ol 'section name)
+        (overlay-put ol 'offset offset)
+        (overlay-put ol 'size size)))))
 
 (defun elf-revert-buffer ()
   (interactive)
@@ -85,6 +105,7 @@
     (let* ((state (cdr (assoc elf-mode-buffer-type elf-mode-buffer-types)))
            (command (cdr (assoc 'command state)))
            (stdout (current-buffer))
+           (inhibit-read-only t)
            (stderr (generate-new-buffer "*readelf stderr*"))
            (file-name (elf-mode-buffer-file-name)))
       (setf (buffer-string) "")
@@ -107,7 +128,12 @@
          (with-current-buffer stdout
            (when (string= event "finished\n")
              (cond
-              ((eq elf-mode-buffer-type 'symbols) (elf-add-func-refs))))
+              ((or (eq elf-mode-buffer-type 'headers)
+                   (eq elf-mode-buffer-type 'section-headers))
+               (elf-add-sections-refs))
+              ((or (eq elf-mode-buffer-type 'dyn-syms)
+                   (eq elf-mode-buffer-type 'symbols))
+               (elf-add-func-refs))))
            (goto-char (point-min))
            (set-buffer-modified-p nil)
            (read-only-mode))
@@ -122,9 +148,8 @@
   (unless (string-empty-p s)
     (setq elf-mode-disassemble-command s)))
 
-(defun elf-mode-disassemble (o)
-  (interactive)
-  (let* ((symbol (buffer-substring (overlay-start o) (overlay-end o)))
+(defun elf-mode-disassemble (overlay)
+  (let* ((symbol (overlay-get overlay 'symbol))
          (buffer-name (format "%s(%s)" (buffer-name) symbol))
          (command (format elf-mode-disassemble-command (elf-mode-buffer-file-name) symbol)))
     (with-current-buffer (pop-to-buffer buffer-name)
@@ -137,6 +162,18 @@
       (setq-local tab-width 8)
       (read-only-mode))))
 
+(defun elf-mode-binary (overlay)
+  (let* ((section (overlay-get overlay 'section))
+         (offset (overlay-get overlay 'offset))
+         (size (overlay-get overlay 'size))
+         (buffer-name (format "%s(%s)" (buffer-name) section))
+         (command (format elf-mode-binary-command offset size (elf-mode-buffer-file-name))))
+    (with-current-buffer (pop-to-buffer buffer-name)
+      (shell-command command (current-buffer))
+      (set-buffer-modified-p nil)
+      (setq buffer-undo-list nil)
+      (hexl-mode)
+      (read-only-mode))))
 
 (defconst elf-mode-syntax-table
   (let ((st (make-syntax-table)))
