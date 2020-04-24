@@ -143,11 +143,6 @@
                (message "elf-mode: %s\n%s" event err))))
          (kill-buffer stderr))))))
 
-(defun elf-mode-set-disassemble-command (s)
-  (interactive "sDisassemble command: ")
-  (unless (string-empty-p s)
-    (setq elf-mode-disassemble-command s)))
-
 (defun elf-mode-disassemble (overlay)
   (let* ((symbol (overlay-get overlay 'symbol))
          (buffer-name (format "%s(%s)" (buffer-name) symbol))
@@ -157,9 +152,10 @@
       (flush-lines "^[[:space:]]*$" (point-min) (point-max))
       (set-buffer-modified-p nil)
       (asm-mode)
-      ;;(gdb-disassembly-mode)
+      (while (re-search-forward "\\(<\\+[[:digit:]]+>:\\)\t" nil t)
+        (replace-match (concat "\\1" (make-string (+ 1 (max 0 (- 8 (length (match-string 1))))) ? ))))
       (setq-local asm-comment-char ?#)
-      (setq-local tab-width 8)
+      (setq-local tab-width 32)
       (read-only-mode))))
 
 (defun elf-mode-binary (overlay)
