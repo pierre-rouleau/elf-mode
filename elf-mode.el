@@ -38,6 +38,15 @@
 
 (defvar elf-mode-buffer-initial-type 'dynamic)
 
+(defface elf-mode-disassemble-hex
+  '((((class color) (background light)) :foreground "grey30")
+    (((class color) (background  dark)) :foreground "grey80"))
+  "Face for the disassembled hex values.")
+
+(defface elf-mode-disassemble-opcode
+  '((((class color) (background light)) :foreground "blue"))
+  "Face for the disassembled opcode values.")
+
 (defvar-local elf-mode-buffer-type elf-mode-buffer-initial-type)
 
 (defvar-local elf-mode-buffer-types
@@ -152,10 +161,18 @@
       (flush-lines "^[[:space:]]*$" (point-min) (point-max))
       (set-buffer-modified-p nil)
       (asm-mode)
-      (while (re-search-forward "\\(<\\+[[:digit:]]+>:\\)\t" nil t)
-        (replace-match (concat "\\1" (make-string (+ 1 (max 0 (- 8 (length (match-string 1))))) ? ))))
+      (while (re-search-forward "\\(<\\+[[:digit:]]+>:\\)\t\\([a-f0-9 ]+\\)\t\\([a-zA-Z0-9]+\\)" nil t)
+        (let* ((offset (concat (match-string 1) (make-string (+ 1 (max 0 (- 8 (length (match-string 1))))) ? )))
+               (hex (concat (match-string 2) (make-string (+ 1 (max 0 (- 32 (length (match-string 2))))) ? )))
+               (opcode (match-string 3))
+               (beg1 (match-beginning 1))
+               (beg2 (+ beg1 (length offset)))
+               (beg3 (+ beg2 (length hex)))
+               (end3 (+ beg3 (length opcode))))
+          (replace-match (concat offset hex opcode))
+          (put-text-property beg2 beg3 'font-lock-face 'elf-mode-disassemble-hex)
+          (put-text-property beg3 end3 'font-lock-face 'elf-mode-disassemble-opcode)))
       (setq-local asm-comment-char ?#)
-      (setq-local tab-width 32)
       (read-only-mode))))
 
 (defun elf-mode-binary (overlay)
