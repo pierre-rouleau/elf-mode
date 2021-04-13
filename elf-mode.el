@@ -49,6 +49,17 @@
 
 (defvar-local elf-mode-buffer-type elf-mode-buffer-initial-type)
 
+(defcustom elf-mode-gdb-alist `(("00b7" . "aarch64-linux-gnu-gdb")
+                                ("0028" . "arm-none-eabi-gdb"))
+  "The gdb binary used by used by the corresponding platform.
+
+Each element has the form (E_MACHINE . GDB).
+ E_MACHINE is a elf file header e_machine value, as a string in lower case.
+ GDB pecifies the gdb command for corresponding platform."
+  :type '(alist :key-type (string :tag "e_machine id")
+                :value-type (string :tag "gdb executable")))
+(defvar-local elf-mode-gdb-executable "gdb")
+
 (defvar-local elf-mode-buffer-types
   '((arch-specific   . ((key . "A") (command . ("readelf" "-W" "--arch-specific"))))
     (archive-index   . ((key . "c") (command . ("readelf" "-W" "--archive-index"))))
@@ -70,7 +81,7 @@
 ))
 
 (defvar-local elf-mode-disassemble-command
-  "gdb -n -q -batch -ex 'file %s' -ex 'disassemble/rs %s'")
+  "%s -n -q -batch -ex 'file %s' -ex 'disassemble/rs %s'")
 
 (defvar-local elf-mode-binary-command
   "dd status=none bs=1 skip=%s count=%s if=%s")
@@ -118,6 +129,11 @@
            (stderr (generate-new-buffer "*readelf stderr*"))
            (file-name (elf-mode-buffer-file-name)))
       (setf (buffer-string) "")
+      (let* ((get_e_machine_command
+              (format "hexdump -e '1/2 \"%s\"' -s 0x12 -n 2 %s" "%04x" file-name))
+             (e_machine (string-trim (shell-command-to-string get_e_machine_command)))
+             (gdb (assoc e_machine elf-mode-gdb-alist)))
+        (if gdb (setq-local elf-mode-gdb-executable (cdr gdb))))
 
       (make-process
        :name "readelf"
@@ -155,7 +171,8 @@
 (defun elf-mode-disassemble (overlay)
   (let* ((symbol (overlay-get overlay 'symbol))
          (buffer-name (format "%s(%s)" (buffer-name) symbol))
-         (command (format elf-mode-disassemble-command (elf-mode-buffer-file-name) symbol)))
+         (command (format elf-mode-disassemble-command elf-mode-gdb-executable
+                          (elf-mode-buffer-file-name) symbol)))
     (with-current-buffer (pop-to-buffer buffer-name)
       (shell-command command (current-buffer))
       (flush-lines "^[[:space:]]*$" (point-min) (point-max))
