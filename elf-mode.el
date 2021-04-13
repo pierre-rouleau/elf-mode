@@ -36,31 +36,9 @@
 
 (eval-when-compile (require 'subr-x))
 
-(defvar elf-mode-buffer-initial-type 'dynamic)
-
-(defface elf-mode-disassemble-hex
-  '((((class color) (background light)) :foreground "grey30")
-    (((class color) (background  dark)) :foreground "grey80"))
-  "Face for the disassembled hex values.")
-
-(defface elf-mode-disassemble-opcode
-  '((((class color) (background light)) :foreground "blue"))
-  "Face for the disassembled opcode values.")
-
-(defvar-local elf-mode-buffer-type elf-mode-buffer-initial-type)
-
-(defcustom elf-mode-gdb-alist `(("00b7" . "aarch64-linux-gnu-gdb")
-                                ("0028" . "arm-none-eabi-gdb"))
-  "The gdb binary used by used by the corresponding platform.
-
-Each element has the form (E_MACHINE . GDB).
- E_MACHINE is a elf file header e_machine value, as a string in lower case.
- GDB pecifies the gdb command for corresponding platform."
-  :type '(alist :key-type (string :tag "e_machine id")
-                :value-type (string :tag "gdb executable")))
-(defvar-local elf-mode-gdb-executable "gdb")
-
-(defvar-local elf-mode-buffer-types
+;; Constants
+;; TODO: change to defcustom
+(defconst elf-mode-buffer-types
   '((arch-specific   . ((key . "A") (command . ("readelf" "-W" "--arch-specific"))))
     (archive-index   . ((key . "c") (command . ("readelf" "-W" "--archive-index"))))
     (dynamic         . ((key . "d") (command . ("readelf" "-W" "--dynamic"))))
@@ -80,19 +58,68 @@ Each element has the form (E_MACHINE . GDB).
     (strings         . ((key . "z") (command . ("strings"))))
 ))
 
+;; Customizable variables
+(defgroup elf-mode nil "ELF mode customizable variables")
+
+(defcustom elf-mode-buffer-initial-type 'dynamic
+  "The initiaial state of an ELF buffer"
+  :type 'symbol
+  :group 'elf-mode)
+
+(defcustom elf-mode-use-local-toolchain t
+  "Use a toolchain on local or remote machine
+
+  TODO: Using toolchains remotely is not implemented, required commit
+  https://github.com/emacs-mirror/emacs/commit/83b1db043b44a8efb091ced873eab686e671c5ac
+  "
+  :type 'boolean
+  :group 'elf-mode)
+
+(defcustom elf-mode-gdb-alist `(("00b7" . "aarch64-linux-gnu-gdb")
+                                ("0028" . "arm-none-eabi-gdb"))
+  "The gdb binary used by used by the corresponding platform.
+
+Each element has the form (E_MACHINE . GDB).
+ E_MACHINE is a elf file header e_machine value, as a string in lower case.
+ GDB pecifies the gdb command for corresponding platform."
+  :type '(alist :key-type (string :tag "e_machine id")
+          :value-type (string :tag "gdb executable"))
+  :group 'elf-mode)
+
+
+;; Faces
+(defface elf-mode-disassemble-hex
+  '((((class color) (background light)) :foreground "grey30")
+    (((class color) (background  dark)) :foreground "grey80"))
+  "Face for the disassembled hex values.")
+
+(defface elf-mode-disassemble-opcode
+  '((((class color) (background light)) :foreground "blue"))
+  "Face for the disassembled opcode values.")
+
+
+;; Local variables
+(defvar-local elf-mode-buffer-type elf-mode-buffer-initial-type)
+
+(defvar-local elf-mode-gdb-executable "gdb")
+
 (defvar-local elf-mode-disassemble-command
   "%s -n -q -batch -ex 'file %s' -ex 'disassemble/rs %s'")
 
 (defvar-local elf-mode-binary-command
   "dd status=none bs=1 skip=%s count=%s if=%s")
 
+
+;;
 (defun elf-mode-buffer-file-name ()
+  "Get local file name of a buffer."
   (cond
-   ((and (fboundp 'tramp-tramp-file-p) (tramp-tramp-file-p (buffer-file-name)))
+   ((and elf-mode-use-local-toolchain (fboundp 'tramp-tramp-file-p) (tramp-tramp-file-p (buffer-file-name)))
     (tramp-handle-file-local-copy (buffer-file-name)))
    (t (buffer-file-name))))
 
 (defun elf-add-func-refs ()
+  "Add references to disassemble commands for FUNC entries."
   (goto-char (point-min))
   (while (re-search-forward "FUNC[[:space:]]+\\([[:alnum:]]+[[:space:]]+\\)\\{3\\}\\(\\sw+\\)" nil t)
     (let* ((name (match-string 2))
@@ -104,6 +131,7 @@ Each element has the form (E_MACHINE . GDB).
       (overlay-put ol 'symbol name))))
 
 (defun elf-add-sections-refs ()
+  "Add references to hexl commands for header sections."
   (goto-char (point-min))
   (while (re-search-forward "^ *\\[ *[[:digit:]]+] +\\([^ ]+\\) +[^ ]+ +[^ ]+ +\\([^ ]+\\) +\\([^ ]+\\)" nil t)
     (when (string-prefix-p "." (match-string 1))
@@ -127,20 +155,21 @@ Each element has the form (E_MACHINE . GDB).
            (stdout (current-buffer))
            (inhibit-read-only t)
            (stderr (generate-new-buffer "*readelf stderr*"))
-           (file-name (elf-mode-buffer-file-name)))
+           (file-name (elf-mode-buffer-file-name))
+           (default-directory (file-name-directory file-name)))
       (setf (buffer-string) "")
       (let* ((get_e_machine_command
-              (format "hexdump -e '1/2 \"%s\"' -s 0x12 -n 2 %s" "%04x" file-name))
+              (format "hexdump -e '1/2 \"%s\"' -s 0x12 -n 2 %s" "%04x" (file-name-nondirectory file-name)))
              (e_machine (string-trim (shell-command-to-string get_e_machine_command)))
              (gdb (assoc e_machine elf-mode-gdb-alist)))
         (if gdb (setq-local elf-mode-gdb-executable (cdr gdb))))
 
-      (make-process
+      (make-process ;; TODO: switch to tramp-handle-make-process
        :name "readelf"
        :buffer nil
        :stderr stderr
        :noquery t
-       :command (append command `(,file-name))
+       :command (append command `(,(file-name-nondirectory file-name)))
        :filter
        (lambda (proc _msg)
          (when (buffer-live-p stdout)
@@ -169,10 +198,12 @@ Each element has the form (E_MACHINE . GDB).
          (kill-buffer stderr))))))
 
 (defun elf-mode-disassemble (overlay)
+  "Mode for disassembled code"
   (let* ((symbol (overlay-get overlay 'symbol))
          (buffer-name (format "%s(%s)" (buffer-name) symbol))
-         (command (format elf-mode-disassemble-command elf-mode-gdb-executable
-                          (elf-mode-buffer-file-name) symbol)))
+         (file-name (elf-mode-buffer-file-name))
+         (default-directory (file-name-directory file-name))
+         (command (format elf-mode-disassemble-command elf-mode-gdb-executable (file-name-nondirectory file-name) symbol)))
     (with-current-buffer (pop-to-buffer buffer-name)
       (shell-command command (current-buffer))
       (flush-lines "^[[:space:]]*$" (point-min) (point-max))
@@ -197,7 +228,9 @@ Each element has the form (E_MACHINE . GDB).
          (offset (overlay-get overlay 'offset))
          (size (overlay-get overlay 'size))
          (buffer-name (format "%s(%s)" (buffer-name) section))
-         (command (format elf-mode-binary-command offset size (elf-mode-buffer-file-name))))
+         (file-name (elf-mode-buffer-file-name))
+         (default-directory (file-name-directory file-name))
+         (command (format elf-mode-binary-command offset size (file-name-nondirectory file-name))))
     (with-current-buffer (pop-to-buffer buffer-name)
       (shell-command command (current-buffer))
       (set-buffer-modified-p nil)
@@ -237,20 +270,11 @@ Each element has the form (E_MACHINE . GDB).
   (buffer-disable-undo)
   (elf-revert-buffer))
 
-;; TODO
-;; ;; (require 's)
-;; (defun debug-buffer-advice (fun arg)
-;;   ;(when (s-contains? "treemacs-persist" arg)
-;;                                         ;(backtrace);)
-;;   (print fun)
-;;   (print arg)
-;;   (funcall fun arg))
-;; (advice-add #'get-buffer-create :around #'debug-buffer-advice)
-
 ;;;###autoload
 (add-to-list 'magic-mode-alist '("^\177ELF" . elf-mode))
 
 (add-to-list 'magic-mode-alist '("^!<arch>\012/       " . elf-mode))
 
 (provide 'elf-mode)
+
 ;;; elf-mode.el ends here
