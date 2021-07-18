@@ -5,7 +5,7 @@
 
 ;; Author: Oleh Krehel <ohwoeowho@gmail.com>, Michael Krasnyk <michael.krasnyk@gmail.com>
 ;; URL: https://github.com/oxidase/elf-mode
-;; Package-Requires: ((emacs "25"))
+;; Package-Requires: ((emacs "28"))
 ;; Version: 1.0
 ;; Keywords: elf readelf convenience
 
@@ -182,12 +182,13 @@ Each element has the form (E_MACHINE . GDB).
          (with-current-buffer stdout
            (when (string= event "finished\n")
              (cond
-              ((or (eq elf-mode-buffer-type 'headers)
-                   (eq elf-mode-buffer-type 'section-headers))
-               (elf-add-sections-refs))
-              ((or (eq elf-mode-buffer-type 'dyn-syms)
-                   (eq elf-mode-buffer-type 'symbols))
-               (elf-add-func-refs))))
+               ((and (not (string= "a" (file-name-extension file-name))) ;; TODO: add offsets for *.o files shown by "ar tO"
+                 (or (eq elf-mode-buffer-type 'headers)
+                     (eq elf-mode-buffer-type 'section-headers)))
+                (elf-add-sections-refs))
+               ((or (eq elf-mode-buffer-type 'dyn-syms)
+                    (eq elf-mode-buffer-type 'symbols))
+                (elf-add-func-refs))))
            (goto-char (point-min))
            (set-buffer-modified-p nil)
            (read-only-mode))
@@ -232,6 +233,7 @@ Each element has the form (E_MACHINE . GDB).
          (default-directory (file-name-directory file-name))
          (command (format elf-mode-binary-command offset size (file-name-nondirectory file-name))))
     (with-current-buffer (pop-to-buffer buffer-name)
+      (setq buffer-file-coding-system nil)
       (shell-command command (current-buffer))
       (set-buffer-modified-p nil)
       (setq buffer-undo-list nil)
