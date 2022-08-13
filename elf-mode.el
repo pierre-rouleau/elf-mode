@@ -1,7 +1,8 @@
 ;;; elf-mode.el --- Show symbols in binaries -*- lexical-binding: t -*-
 
-;; Copyright (C) 2016 Oleh Krehel
+;; Copyright (C) 2016, Oleh Krehel
 ;; Copyright (C) 2020 Michael Krasnyk
+;; Copyright (C) 2022, Pierre Rouleau
 
 ;; Author: Oleh Krehel <ohwoeowho@gmail.com>, Michael Krasnyk <michael.krasnyk@gmail.com>
 ;; URL: https://github.com/oxidase/elf-mode
@@ -59,10 +60,12 @@
 ))
 
 ;; Customizable variables
-(defgroup elf-mode nil "ELF mode customizable variables")
+(defgroup elf-mode nil
+  "ELF mode customizable variables"
+  :group 'convenience)
 
-(defcustom elf-mode-buffer-initial-type 'dynamic
-  "The initiaial state of an ELF buffer"
+(defcustom elf-mode-buffer-initial-type 'symbols
+  "The initial state of an ELF buffer"
   :type 'symbol
   :group 'elf-mode)
 
@@ -171,14 +174,14 @@ Each element has the form (E_MACHINE . GDB).
        :noquery t
        :command (append command `(,(file-name-nondirectory file-name)))
        :filter
-       (lambda (proc _msg)
+       (lambda (_proc msg)
          (when (buffer-live-p stdout)
            (with-current-buffer stdout
              (setq-local inhibit-read-only t)
              (goto-char (point-max))
-             (insert _msg))))
+             (insert msg))))
        :sentinel
-       (lambda (proc event)
+       (lambda (_proc event)
          (with-current-buffer stdout
            (when (string= event "finished\n")
              (cond
@@ -197,6 +200,8 @@ Each element has the form (E_MACHINE . GDB).
              (unless (string= "" err)
                (message "elf-mode: %s\n%s" event err))))
          (kill-buffer stderr))))))
+
+(defvar-local asm-comment-char ?#)
 
 (defun elf-mode-disassemble (overlay)
   "Mode for disassembled code"
